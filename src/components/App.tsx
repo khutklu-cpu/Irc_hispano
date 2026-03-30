@@ -277,26 +277,36 @@ export const App: React.FC = () => {
 
   async function handleGuestLogin() {
     setError('');
-    setStatus('Conectando como invitado...');
+    setStatus('Intentando acceso como invitado...');
     
     try {
-      // Crear cliente sin autenticación
+      // Intentar guest register primero
       const guestClient = createMatrixClient();
+      await guestClient.registerGuest();
       
-      // Intentar cargar salas públicas sin autenticación
-      // Esto permite ver salas pero probablemente no podremos enviar mensajes
       setClient(guestClient);
       setUserId('(Invitado)');
+      setStatus('Conectado como invitado.');
+      setSessionReady(true);
       setIsGuestMode(true);
-      setStatus('Conectado como invitado (solo lectura).');
-      setSessionReady(true);
     } catch (guestError) {
-      const message = guestError instanceof Error ? guestError.message : 'No se pudo conectar como invitado';
-      setError(message);
-      setStatus('No conectado.');
-      setSessionReady(true);
+      // Si falla guest login, redirigir a la web oficial que SÍ lo soporta
+      const message = guestError instanceof Error ? guestError.message : 'Error desconocido';
+      
+      if (message.includes('M_FORBIDDEN') || message.includes('disabled')) {
+        // El servidor no soporta guest, abrir la web oficial
+        setError('El servidor Matrix requiere cuenta. Abriendo web oficial con guest...');
+        setStatus('Redirigiendo a chathispano.com/element...');
+        
+        setTimeout(() => {
+          window.location.href = 'https://chathispano.com/element/#/welcome';
+        }, 2000);
+      } else {
+        setError(`No se pudo conectar como invitado: ${message}`);
+        setStatus('No conectado.');
+        setSessionReady(true);
+      }
     }
-    setSessionReady(true);
   }
 
   if (!sessionReady && !client) {
