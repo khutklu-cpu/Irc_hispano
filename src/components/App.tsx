@@ -89,7 +89,12 @@ export const App: React.FC = () => {
   const [isGuestMode, setIsGuestMode] = useState(false);
   const timelineEndRef = useRef<HTMLDivElement>(null);
 
+  // Quitar loading screen cuando el componente se monta
   useEffect(() => {
+    if (typeof window !== 'undefined' && window.__hideLoading) {
+      window.__hideLoading();
+    }
+    
     const saved = localStorage.getItem(SESSION_KEY);
     if (!saved) {
       setSessionReady(true);

@@ -13,6 +13,7 @@ const newHtml = `<!doctype html>
     <title>IRC Hispano Client</title>
     <link rel="stylesheet" href="/Irc_hispano/assets/index-25f2ccf6.css">
     <style>
+      body { margin: 0; padding: 0; }
       #loading {
         position: fixed;
         top: 50%;
@@ -25,15 +26,16 @@ const newHtml = `<!doctype html>
         text-align: center;
         font-family: sans-serif;
         z-index: 10000;
+        transition: opacity 0.3s;
       }
-      #loading p {
-        margin: 10px 0;
-        color: #333;
+      #loading.hidden {
+        opacity: 0;
+        pointer-events: none;
       }
-      #loading.error {
-        background: #ffcccc;
-        color: red;
-      }
+      #loading h2 { margin: 0 0 20px 0; }
+      #loading p { margin: 0; color: #666; }
+      #loading.error { background: #ffcccc; }
+      #loading.error p { color: red; }
     </style>
   </head>
   <body>
@@ -44,27 +46,32 @@ const newHtml = `<!doctype html>
     <div id="root"></div>
     
     <script>
+      window.__hideLoading = function() {
+        const loading = document.getElementById('loading');
+        if (loading) {
+          loading.classList.add('hidden');
+          setTimeout(() => loading.remove(), 500);
+        }
+      };
+      
+      window.__showError = function(msg) {
+        const loading = document.getElementById('loading');
+        const status = document.getElementById('status');
+        if (loading) {
+          loading.classList.add('error');
+          status.textContent = '❌ ' + msg;
+        }
+        console.error(msg);
+      };
+      
       const status = document.getElementById('status');
-      const loading = document.getElementById('loading');
+      status.textContent = 'Cargando módulos...';
       
-      function setStatus(msg) {
-        console.log(msg);
-        status.textContent = msg;
-      }
-      
-      setStatus('JavaScript funcionando...');
-      
-      window.addEventListener('error', (event) => {
-        loading.classList.add('error');
-        setStatus('❌ Error: ' + event.message);
-      });
-      
-      window.addEventListener('unhandledrejection', (event) => {
-        loading.classList.add('error');
-        setStatus('❌ Error: ' + event.reason);
-      });
-      
-      setStatus('Cargando módulos...');
+      setTimeout(() => {
+        if (document.getElementById('loading') && !document.getElementById('loading').classList.contains('hidden')) {
+          window.__showError('Timeout: No se pudo cargar la aplicación');
+        }
+      }, 10000);
     </script>
     <script type="module" crossorigin src="/Irc_hispano/assets/index-bacd1da8.js"><\/script>
   </body>
@@ -72,4 +79,5 @@ const newHtml = `<!doctype html>
 
 fs.writeFileSync(distIndex, newHtml, 'utf-8');
 console.log('✓ Fixed dist/index.html');
+
 
