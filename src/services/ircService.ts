@@ -49,12 +49,7 @@ export class IRCService {
               reject(new Error(data.error || 'Connection failed'));
             }
           })
-          .catch(() => {
-            // En despliegues estáticos (p. ej. GitHub Pages) no existe /irc.
-            // Activamos modo simulación para que la UI siga usable.
-            this.startSimulationMode();
-            resolve();
-          });
+          .catch(() => reject(new Error('No se pudo conectar con el proxy IRC')));
       } catch (error) {
         reject(error);
       }

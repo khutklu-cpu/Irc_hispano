@@ -5,10 +5,16 @@
 
 import net from 'net';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const port = process.env.PORT || 3001;
 const ircServer = 'irc.irc-hispano.org';
 const ircPort = 6667;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const distDir = path.join(__dirname, 'dist');
 
 // Rate limiting
 const clientRateLimits = new Map();
@@ -114,10 +120,71 @@ class IRCProxy {
 
     if (req.method === 'POST' && req.url === '/irc') {
       this.handleIRCRequest(req, res, clientIp);
+    } else if (req.method === 'GET' || req.method === 'HEAD') {
+      this.handleStaticRequest(req, res);
     } else {
       res.writeHead(404);
       res.end();
     }
+  }
+
+  /**
+   * Servir archivos estáticos del build de Vite
+   */
+  handleStaticRequest(req, res) {
+    const rawPath = req.url.split('?')[0];
+    const safePath = rawPath === '/' ? '/index.html' : rawPath;
+    const filePath = path.normalize(path.join(distDir, safePath));
+
+    if (!filePath.startsWith(distDir)) {
+      res.writeHead(403);
+      res.end('Forbidden');
+      return;
+    }
+
+    const fallbackToIndex = () => {
+      const indexPath = path.join(distDir, 'index.html');
+      this.sendFile(indexPath, res);
+    };
+
+    fs.stat(filePath, (err, stats) => {
+      if (err || !stats.isFile()) {
+        fallbackToIndex();
+        return;
+      }
+      this.sendFile(filePath, res);
+    });
+  }
+
+  /**
+   * Enviar archivo con content-type básico
+   */
+  sendFile(filePath, res) {
+    const ext = path.extname(filePath).toLowerCase();
+    const contentTypes = {
+      '.html': 'text/html; charset=utf-8',
+      '.js': 'text/javascript; charset=utf-8',
+      '.css': 'text/css; charset=utf-8',
+      '.json': 'application/json; charset=utf-8',
+      '.svg': 'image/svg+xml',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.ico': 'image/x-icon',
+      '.txt': 'text/plain; charset=utf-8'
+    };
+
+    const contentType = contentTypes[ext] || 'application/octet-stream';
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(404);
+        res.end('Not Found');
+        return;
+      }
+
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(data);
+    });
   }
 
   /**
