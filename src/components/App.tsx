@@ -86,6 +86,7 @@ export const App: React.FC = () => {
   const [draft, setDraft] = useState('');
   const [joinTarget, setJoinTarget] = useState('');
   const [tick, setTick] = useState(0);
+  const [isGuestMode, setIsGuestMode] = useState(false);
   const timelineEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -271,6 +272,30 @@ export const App: React.FC = () => {
     setJoinTarget('');
     setError('');
     setStatus('Sesion cerrada.');
+    setIsGuestMode(false);
+  }
+
+  async function handleGuestLogin() {
+    setError('');
+    setStatus('Conectando como invitado...');
+    
+    try {
+      // Crear cliente sin autenticación
+      const guestClient = createMatrixClient();
+      
+      // Intentar cargar salas públicas sin autenticación
+      // Esto permite ver salas pero probablemente no podremos enviar mensajes
+      setClient(guestClient);
+      setUserId('(Invitado)');
+      setIsGuestMode(true);
+      setStatus('Conectado como invitado (solo lectura).');
+      setSessionReady(true);
+    } catch (guestError) {
+      const message = guestError instanceof Error ? guestError.message : 'No se pudo conectar como invitado';
+      setError(message);
+      setStatus('No conectado.');
+      setSessionReady(true);
+    }
     setSessionReady(true);
   }
 
@@ -315,6 +340,12 @@ export const App: React.FC = () => {
             </button>
           </form>
 
+          <div className="login-divider">o</div>
+
+          <button className="guest-button" onClick={handleGuestLogin} type="button">
+            Entrar como Invitado (solo lectura)
+          </button>
+
           <p className="status-line">{status}</p>
           {error && <p className="error-box">{error}</p>}
         </section>
@@ -331,7 +362,7 @@ export const App: React.FC = () => {
         </div>
 
         <div className="topbar-meta">
-          <span>{client.getUserId()}</span>
+          <span>{client.getUserId()} {isGuestMode && '(Invitado)'}</span>
           <button className="ghost-button" onClick={handleLogout} type="button">
             Salir
           </button>

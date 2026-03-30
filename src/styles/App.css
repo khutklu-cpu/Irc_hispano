@@ -140,6 +140,30 @@ input:focus {
   border: 1px solid var(--line);
 }
 
+.guest-button {
+  min-height: 46px;
+  border-radius: 999px;
+  padding: 0 16px;
+  cursor: pointer;
+  border: 2px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  transition: transform 0.15s ease, background 0.15s ease;
+  font-weight: 600;
+}
+
+.guest-button:hover {
+  background: rgba(14, 105, 125, 0.1);
+  transform: translateY(-1px);
+}
+
+.login-divider {
+  text-align: center;
+  color: var(--muted);
+  margin: 16px 0;
+  font-size: 0.92rem;
+}
+
 .status-line,
 .error-box,
 .error-inline {
