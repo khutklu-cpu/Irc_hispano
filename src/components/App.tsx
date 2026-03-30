@@ -46,7 +46,6 @@ export const App: React.FC = () => {
     setConnected,
     setNickname,
     addChannel,
-    removeChannel,
     setCurrentTab,
     addMessage,
     sendMessage,

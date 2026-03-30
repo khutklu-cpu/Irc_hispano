@@ -68,12 +68,12 @@ export const IRC_CONFIG = {
 
   // Desarrollo
   API: {
-    BASE_URL: process.env.VITE_API_URL || 'http://localhost:3001',
+    BASE_URL: import.meta.env.VITE_API_URL || 'http://localhost:3001',
     TIMEOUT: 10000,
   },
 
   // Niveles de log
-  LOG_LEVEL: process.env.VITE_LOG_LEVEL || 'info', // 'debug' | 'info' | 'warn' | 'error'
+  LOG_LEVEL: import.meta.env.VITE_LOG_LEVEL || 'info', // 'debug' | 'info' | 'warn' | 'error'
 };
 
 // Mensajes predeterminados del sistema

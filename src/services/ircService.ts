@@ -2,7 +2,6 @@ import { IRCMessage, Channel, Message, PrivateChat, UserInfo } from '../types/ir
 
 export class IRCService {
   private hostname: string = 'irc.irc-hispano.org';
-  private port: number = 6667;
   private nickname: string = '';
   private username: string = '';
   private realname: string = '';
@@ -10,7 +9,6 @@ export class IRCService {
   private privateChats: Map<string, PrivateChat> = new Map();
   private messageHandlers: Array<(msg: Message) => void> = [];
   private stateHandlers: Array<(state: any) => void> = [];
-  private clientId: string = '';
 
   constructor() {
     this.initializeHandlers();
@@ -26,7 +24,6 @@ export class IRCService {
         this.nickname = nickname;
         this.username = username || nickname;
         this.realname = realname || nickname;
-        this.clientId = Math.random().toString(36).substring(7);
 
         // Enviar solicitud de conexión al servidor proxy
         const connectData = {
@@ -46,14 +43,18 @@ export class IRCService {
           .then(res => res.json())
           .then(data => {
             if (data.success) {
-              this.clientId = data.clientId;
               this.startSimulationMode();
               resolve();
             } else {
               reject(new Error(data.error || 'Connection failed'));
             }
           })
-          .catch(err => reject(err));
+          .catch(() => {
+            // En despliegues estáticos (p. ej. GitHub Pages) no existe /irc.
+            // Activamos modo simulación para que la UI siga usable.
+            this.startSimulationMode();
+            resolve();
+          });
       } catch (error) {
         reject(error);
       }
