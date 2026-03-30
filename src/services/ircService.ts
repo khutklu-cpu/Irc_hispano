@@ -1,7 +1,6 @@
-import SockJS from 'sockjs-client';
 import { IRCMessage, Channel, Message, PrivateChat, UserInfo } from '../types/irc';
 
-const KIWI_SERVER = 'https://kiwi.chathispano.com:9000/webirc/kiwiirc/';
+const KIWI_SERVER = 'wss://kiwi.chathispano.com:9000/webirc/kiwiirc/';
 const IRC_HOST = 'irc.chathispano.com';
 const IRC_PORT = 7002;
 const CONTROL_CHANNEL = '0';
@@ -29,8 +28,14 @@ function normalizeChannelName(name: string): string {
   return trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
 }
 
+function createSockJsWebsocketUrl(): string {
+  const serverId = `${Math.floor(Math.random() * 1000)}`.padStart(3, '0');
+  const session = Math.random().toString(36).slice(2, 12);
+  return `${KIWI_SERVER}${serverId}/${session}/websocket`;
+}
+
 export class IRCService {
-  private socket: any = null;
+  private socket: WebSocket | null = null;
   private nickname = '';
   private username = '';
   private realname = '';
@@ -71,16 +76,14 @@ export class IRCService {
       this.connectRejecter = reject;
       this.connectTimeout = window.setTimeout(() => {
         this.failConnection(new Error('Tiempo de espera agotado conectando al IRC.'));
-      }, 15000);
+      }, 20000);
 
       this.pendingControl.push(`HOST ${IRC_HOST}:+${IRC_PORT}`);
       this.pendingLines.push('CAP LS 302');
       this.pendingLines.push(`NICK ${this.nickname}`);
       this.pendingLines.push(`USER ${this.username} 0 * :${this.realname}`);
 
-      const socket = new SockJS(KIWI_SERVER, undefined, {
-        transports: ['websocket', 'xhr-streaming', 'xhr-polling'],
-      });
+      const socket = new WebSocket(createSockJsWebsocketUrl());
       this.socket = socket;
 
       socket.onopen = () => {
@@ -94,12 +97,12 @@ export class IRCService {
           action: 'socket-open',
         });
 
-        this.socket?.send(`:${CONTROL_CHANNEL} CONTROL START`);
-        this.socket?.send(`:${IRC_CHANNEL}`);
+        this.sendGatewayPayload(`:${CONTROL_CHANNEL} CONTROL START`);
+        this.sendGatewayPayload(`:${IRC_CHANNEL}`);
       };
 
-      socket.onmessage = (event: { data: unknown }) => {
-        this.handleSocketMessage(String(event.data));
+      socket.onmessage = (event) => {
+        this.handleSockJsFrame(String(event.data));
       };
 
       socket.onclose = () => {
@@ -256,7 +259,7 @@ export class IRCService {
     if (this.socket) {
       try {
         if (this.ircReady) {
-          this.socket.send(`:${IRC_CHANNEL} QUIT :Hasta luego`);
+          this.sendGatewayPayload(`:${IRC_CHANNEL} QUIT :Hasta luego`);
         }
       } catch {
         // Ignore socket send failures while disconnecting.
@@ -341,6 +344,32 @@ export class IRCService {
     }
 
     this.handleIrcLine(payload);
+  }
+
+  private handleSockJsFrame(frame: string): void {
+    if (!frame) return;
+
+    if (frame === 'o') {
+      return;
+    }
+
+    if (frame === 'h') {
+      return;
+    }
+
+    if (frame.startsWith('a')) {
+      try {
+        const payloads = JSON.parse(frame.slice(1)) as string[];
+        payloads.forEach((payload) => this.handleSocketMessage(payload));
+      } catch {
+        // Ignore malformed frames.
+      }
+      return;
+    }
+
+    if (frame.startsWith('c')) {
+      this.failConnection(new Error('El gateway IRC cerro la sesion SockJS.'));
+    }
   }
 
   private handleIrcLine(line: string): void {
@@ -520,7 +549,7 @@ export class IRCService {
 
   private sendControl(line: string): void {
     if (this.gatewayReady && this.socket) {
-      this.socket.send(`:${IRC_CHANNEL} ${line}`);
+      this.sendGatewayPayload(`:${IRC_CHANNEL} ${line}`);
       return;
     }
     this.pendingControl.push(line);
@@ -531,13 +560,13 @@ export class IRCService {
     const queued = [...this.pendingControl];
     this.pendingControl = [];
     queued.forEach((line) => {
-      this.socket?.send(`:${IRC_CHANNEL} ${line}`);
+      this.sendGatewayPayload(`:${IRC_CHANNEL} ${line}`);
     });
   }
 
   private sendRaw(line: string): void {
     if (this.ircReady && this.socket) {
-      this.socket.send(`:${IRC_CHANNEL} ${line}`);
+      this.sendGatewayPayload(`:${IRC_CHANNEL} ${line}`);
       return;
     }
     this.pendingLines.push(line);
@@ -548,8 +577,13 @@ export class IRCService {
     const queued = [...this.pendingLines];
     this.pendingLines = [];
     queued.forEach((line) => {
-      this.socket?.send(`:${IRC_CHANNEL} ${line}`);
+      this.sendGatewayPayload(`:${IRC_CHANNEL} ${line}`);
     });
+  }
+
+  private sendGatewayPayload(payload: string): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify([payload]));
   }
 
   private storeMessage(target: string, message: Message): void {
