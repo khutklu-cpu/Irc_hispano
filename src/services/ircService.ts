@@ -1,6 +1,7 @@
 import { IRCMessage, Channel, Message, PrivateChat, UserInfo } from '../types/irc';
 
-const KIWI_SERVER = 'wss://kiwi.chathispano.com:9000/webirc/kiwiirc/';
+const KIWI_HOST = 'kiwi.chathispano.com';
+const KIWI_PORTS = [9000, 9001, 9002, 9004];
 const IRC_HOST = 'irc.chathispano.com';
 const IRC_PORT = 7002;
 const CONTROL_CHANNEL = '0';
@@ -28,14 +29,15 @@ function normalizeChannelName(name: string): string {
   return trimmed.startsWith('#') ? trimmed : `#${trimmed}`;
 }
 
-function createSockJsWebsocketUrl(): string {
+function createSockJsWebsocketUrl(port: number): string {
   const serverId = `${Math.floor(Math.random() * 1000)}`.padStart(3, '0');
   const session = Math.random().toString(36).slice(2, 12);
-  return `${KIWI_SERVER}${serverId}/${session}/websocket`;
+  return `wss://${KIWI_HOST}:${port}/webirc/kiwiirc/${serverId}/${session}/websocket`;
 }
 
 export class IRCService {
   private socket: WebSocket | null = null;
+  private socketPort: number | null = null;
   private nickname = '';
   private username = '';
   private realname = '';
@@ -76,57 +78,149 @@ export class IRCService {
       this.connectRejecter = reject;
       this.connectTimeout = window.setTimeout(() => {
         this.failConnection(new Error('Tiempo de espera agotado conectando al IRC.'));
-      }, 20000);
+      }, 22000);
 
       this.pendingControl.push(`HOST ${IRC_HOST}:+${IRC_PORT}`);
       this.pendingLines.push('CAP LS 302');
       this.pendingLines.push(`NICK ${this.nickname}`);
       this.pendingLines.push(`USER ${this.username} 0 * :${this.realname}`);
 
-      const socket = new WebSocket(createSockJsWebsocketUrl());
-      this.socket = socket;
+      this.connectWithPortFallback().catch((error) => {
+        const message = error instanceof Error ? error.message : 'No se pudo abrir el gateway IRC.';
+        this.failConnection(new Error(message));
+      });
+    });
+  }
 
-      socket.onopen = () => {
+  private async connectWithPortFallback(): Promise<void> {
+    let lastError = 'No se pudo abrir conexion al gateway IRC.';
+
+    for (const port of KIWI_PORTS) {
+      this.emitStateChange({
+        connected: false,
+        nickname: this.nickname,
+        server: IRC_HOST,
+        port: IRC_PORT,
+        channels: this.getChannels(),
+        status: `Probando gateway IRC en puerto ${port}...`,
+        action: 'socket-probe',
+      });
+
+      try {
+        const socket = await this.openSocketOnPort(port);
+        this.socket = socket;
+        this.socketPort = port;
+        this.bindActiveSocket(socket);
+
         this.emitStateChange({
           connected: false,
           nickname: this.nickname,
           server: IRC_HOST,
           port: IRC_PORT,
           channels: this.getChannels(),
-          status: 'Conectando al gateway IRC...',
+          status: `Gateway IRC conectado en puerto ${port}.`,
           action: 'socket-open',
         });
 
         this.sendGatewayPayload(`:${CONTROL_CHANNEL} CONTROL START`);
         this.sendGatewayPayload(`:${IRC_CHANNEL}`);
+        return;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : `Fallo en puerto ${port}.`;
+      }
+    }
+
+    throw new Error(lastError);
+  }
+
+  private openSocketOnPort(port: number): Promise<WebSocket> {
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(createSockJsWebsocketUrl(port));
+      let settled = false;
+
+      const timer = window.setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        try {
+          socket.close();
+        } catch {
+          // Ignore close errors while probing.
+        }
+        reject(new Error(`Timeout abriendo WebSocket en puerto ${port}.`));
+      }, 6000);
+
+      const cleanup = () => {
+        window.clearTimeout(timer);
+        socket.onopen = null;
+        socket.onclose = null;
+        socket.onerror = null;
       };
 
-      socket.onmessage = (event) => {
-        this.handleSockJsFrame(String(event.data));
+      socket.onopen = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(socket);
+      };
+
+      socket.onerror = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(`Error abriendo WebSocket en puerto ${port}.`));
       };
 
       socket.onclose = () => {
-        const wasConnected = this.connected;
-        this.gatewayReady = false;
-        this.ircReady = false;
-        this.connected = false;
-
-        if (!wasConnected) {
-          this.failConnection(new Error('El gateway IRC cerro la conexion antes de completar el acceso.'));
-          return;
-        }
-
-        this.emitStateChange({
-          connected: false,
-          nickname: this.nickname,
-          server: IRC_HOST,
-          port: IRC_PORT,
-          channels: this.getChannels(),
-          status: 'Conexion IRC cerrada.',
-          action: 'socket-close',
-        });
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error(`WebSocket cerrado al abrir en puerto ${port}.`));
       };
     });
+  }
+
+  private bindActiveSocket(socket: WebSocket): void {
+    socket.onmessage = (event) => {
+      this.handleSockJsFrame(String(event.data));
+    };
+
+    socket.onerror = () => {
+      const status = this.socketPort
+        ? `Error de transporte en gateway IRC (puerto ${this.socketPort}).`
+        : 'Error de transporte en gateway IRC.';
+
+      this.emitStateChange({
+        connected: this.connected,
+        nickname: this.nickname,
+        server: IRC_HOST,
+        port: IRC_PORT,
+        channels: this.getChannels(),
+        status,
+        action: 'socket-error',
+      });
+    };
+
+    socket.onclose = () => {
+      const wasConnected = this.connected;
+      this.gatewayReady = false;
+      this.ircReady = false;
+      this.connected = false;
+
+      if (!wasConnected) {
+        this.failConnection(new Error('El gateway IRC cerro la conexion antes de completar el acceso.'));
+        return;
+      }
+
+      this.emitStateChange({
+        connected: false,
+        nickname: this.nickname,
+        server: IRC_HOST,
+        port: IRC_PORT,
+        channels: this.getChannels(),
+        status: 'Conexion IRC cerrada.',
+        action: 'socket-close',
+      });
+    };
   }
 
   joinChannel(channelName: string): void {
@@ -277,6 +371,7 @@ export class IRCService {
     this.gatewayReady = false;
     this.ircReady = false;
     this.connected = false;
+    this.socketPort = null;
     this.pendingControl = [];
     this.pendingLines = [];
 
@@ -310,42 +405,6 @@ export class IRCService {
     this.sendRaw(`NICK ${nextNickname}`);
   }
 
-  private handleSocketMessage(data: string): void {
-    if (!data.startsWith(':')) {
-      return;
-    }
-
-    const spaceIndex = data.indexOf(' ');
-    if (spaceIndex === -1) {
-      const channelId = data.substring(1);
-      if (channelId === IRC_CHANNEL) {
-        this.gatewayReady = true;
-        this.flushControlQueue();
-        this.sendControl('ENCODING utf8');
-      }
-      return;
-    }
-
-    const channelId = data.substring(1, spaceIndex);
-    const payload = data.substring(spaceIndex + 1);
-    if (channelId !== IRC_CHANNEL) {
-      return;
-    }
-
-    if (payload.startsWith('control connected')) {
-      this.ircReady = true;
-      this.flushLineQueue();
-      return;
-    }
-
-    if (payload.startsWith('control closed')) {
-      this.failConnection(new Error('El gateway IRC cerro el canal de acceso.'));
-      return;
-    }
-
-    this.handleIrcLine(payload);
-  }
-
   private handleSockJsFrame(frame: string): void {
     if (!frame) return;
 
@@ -370,6 +429,60 @@ export class IRCService {
     if (frame.startsWith('c')) {
       this.failConnection(new Error('El gateway IRC cerro la sesion SockJS.'));
     }
+  }
+
+  private handleSocketMessage(data: string): void {
+    if (!data.startsWith(':')) {
+      return;
+    }
+
+    const spaceIndex = data.indexOf(' ');
+    if (spaceIndex === -1) {
+      const channelId = data.substring(1);
+      if (channelId === IRC_CHANNEL) {
+        this.gatewayReady = true;
+        this.flushControlQueue();
+        this.sendControl('ENCODING utf8');
+        this.emitStateChange({
+          connected: false,
+          nickname: this.nickname,
+          server: IRC_HOST,
+          port: IRC_PORT,
+          channels: this.getChannels(),
+          status: 'Canal IRC abierto. Iniciando autenticacion...',
+          action: 'gateway-open',
+        });
+      }
+      return;
+    }
+
+    const channelId = data.substring(1, spaceIndex);
+    const payload = data.substring(spaceIndex + 1);
+    if (channelId !== IRC_CHANNEL) {
+      return;
+    }
+
+    if (payload.startsWith('control connected')) {
+      this.ircReady = true;
+      this.flushLineQueue();
+      this.emitStateChange({
+        connected: false,
+        nickname: this.nickname,
+        server: IRC_HOST,
+        port: IRC_PORT,
+        channels: this.getChannels(),
+        status: 'Gateway conectado. Enviando NICK/USER...',
+        action: 'gateway-connected',
+      });
+      return;
+    }
+
+    if (payload.startsWith('control closed')) {
+      this.failConnection(new Error('El gateway IRC cerro el canal de acceso.'));
+      return;
+    }
+
+    this.handleIrcLine(payload);
   }
 
   private handleIrcLine(line: string): void {
