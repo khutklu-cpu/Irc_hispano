@@ -95,7 +95,10 @@ export class IRCService {
   private async connectWithPortFallback(): Promise<void> {
     let lastError = 'No se pudo abrir conexion al gateway IRC.';
 
+    console.log('[IRC] Iniciando fallback de puertos:', KIWI_PORTS);
     for (const port of KIWI_PORTS) {
+      console.log(`[IRC] Probando puerto ${port}...`);
+      
       this.emitStateChange({
         connected: false,
         nickname: this.nickname,
@@ -107,11 +110,15 @@ export class IRCService {
       });
 
       try {
+        console.log(`[IRC] Abriendo WebSocket en puerto ${port}...`);
         const socket = await this.openSocketOnPort(port);
+        console.log(`[IRC] WebSocket abierto exitosamente en puerto ${port}`);
+        
         this.socket = socket;
         this.socketPort = port;
         this.bindActiveSocket(socket);
 
+        console.log(`[IRC] Socket vinculado, enviando CONTROL START...`);
         this.emitStateChange({
           connected: false,
           nickname: this.nickname,
@@ -124,18 +131,24 @@ export class IRCService {
 
         this.sendGatewayPayload(`:${CONTROL_CHANNEL} CONTROL START`);
         this.sendGatewayPayload(`:${IRC_CHANNEL}`);
+        console.log(`[IRC] CONTROL START enviado, esperando respuesta...`);
         return;
       } catch (error) {
         lastError = error instanceof Error ? error.message : `Fallo en puerto ${port}.`;
+        console.log(`[IRC] Fallo en puerto ${port}: ${lastError}`);
       }
     }
 
+    console.error('[IRC] Todos los puertos fallaron:', lastError);
     throw new Error(lastError);
   }
 
   private openSocketOnPort(port: number): Promise<WebSocket> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(createSockJsWebsocketUrl(port));
+      const wsUrl = createSockJsWebsocketUrl(port);
+      console.log(`[IRC] Creando WebSocket: ${wsUrl.substring(0, 80)}...`);
+      
+      const socket = new WebSocket(wsUrl);
       let settled = false;
 
       const timer = window.setTimeout(() => {
@@ -146,6 +159,7 @@ export class IRCService {
         } catch {
           // Ignore close errors while probing.
         }
+        console.warn(`[IRC] Timeout (6s) en puerto ${port}`);
         reject(new Error(`Timeout abriendo WebSocket en puerto ${port}.`));
       }, 6000);
 
@@ -158,20 +172,23 @@ export class IRCService {
 
       socket.onopen = () => {
         if (settled) return;
+        console.log(`[IRC] onopen disparado para puerto ${port}`);
         settled = true;
         cleanup();
         resolve(socket);
       };
 
-      socket.onerror = () => {
+      socket.onerror = (event) => {
         if (settled) return;
+        console.warn(`[IRC] onerror disparado para puerto ${port}`, event);
         settled = true;
         cleanup();
         reject(new Error(`Error abriendo WebSocket en puerto ${port}.`));
       };
 
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         if (settled) return;
+        console.warn(`[IRC] onclose disparado para puerto ${port}`, event.code, event.reason);
         settled = true;
         cleanup();
         reject(new Error(`WebSocket cerrado al abrir en puerto ${port}.`));
@@ -408,39 +425,50 @@ export class IRCService {
   private handleSockJsFrame(frame: string): void {
     if (!frame) return;
 
+    console.log(`[IRC] Frame recibido: ${frame.substring(0, 50)}${frame.length > 50 ? '...' : ''}`);
+
     if (frame === 'o') {
+      console.log('[IRC] Frame "o" (apertura) recibido');
       return;
     }
 
     if (frame === 'h') {
+      console.log('[IRC] Frame "h" (keep-alive) recibido');
       return;
     }
 
     if (frame.startsWith('a')) {
+      console.log('[IRC] Frame de payload (a[...]) recibido');
       try {
         const payloads = JSON.parse(frame.slice(1)) as string[];
+        console.log(`[IRC] ${payloads.length} payload(s) para procesar`);
         payloads.forEach((payload) => this.handleSocketMessage(payload));
-      } catch {
+      } catch (e) {
+        console.warn('[IRC] Error parseando frame JSON:', e);
         // Ignore malformed frames.
       }
       return;
     }
 
     if (frame.startsWith('c')) {
+      console.error('[IRC] Frame "c" (cierre) recibido');
       this.failConnection(new Error('El gateway IRC cerro la sesion SockJS.'));
     }
   }
 
   private handleSocketMessage(data: string): void {
     if (!data.startsWith(':')) {
+      console.log('[IRC] Mensaje sin prefijo ignorado:', data.substring(0, 50));
       return;
     }
 
     const spaceIndex = data.indexOf(' ');
     if (spaceIndex === -1) {
       const channelId = data.substring(1);
+      console.log(`[IRC] Mensaje sin payload en canal ${channelId}`);
       if (channelId === IRC_CHANNEL) {
         this.gatewayReady = true;
+        console.log('[IRC] Gateway listo, enviando comandos en cola...');
         this.flushControlQueue();
         this.sendControl('ENCODING utf8');
         this.emitStateChange({
@@ -458,7 +486,9 @@ export class IRCService {
 
     const channelId = data.substring(1, spaceIndex);
     const payload = data.substring(spaceIndex + 1);
+    console.log(`[IRC] Mensaje en canal ${channelId}: ${payload.substring(0, 60)}...`);
     if (channelId !== IRC_CHANNEL) {
+      console.log(`[IRC] Ignorando canal ${channelId}, esperamos ${IRC_CHANNEL}`);
       return;
     }
 
@@ -695,8 +725,13 @@ export class IRCService {
   }
 
   private sendGatewayPayload(payload: string): void {
-    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
-    this.socket.send(JSON.stringify([payload]));
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      console.warn('[IRC] Socket no está abierto, no se puede enviar:', payload.substring(0, 50));
+      return;
+    }
+    const jsonPayload = JSON.stringify([payload]);
+    console.log('[IRC] Enviando payload:', payload.substring(0, 80));
+    this.socket.send(jsonPayload);
   }
 
   private storeMessage(target: string, message: Message): void {
