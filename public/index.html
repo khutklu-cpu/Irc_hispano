@@ -6,24 +6,54 @@
     <title>IRC Hispano Client</title>
   </head>
   <body>
+    <div id="loading" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:white;padding:40px;border-radius:10px;box-shadow:0 0 20px rgba(0,0,0,0.2);text-align:center;font-family:sans-serif;z-index:10000;">
+      <h2>Cargando...</h2>
+      <p id="status">Inicializando aplicación...</p>
+    </div>
     <div id="root"></div>
     <script>
-      console.log('🚀 Script iniciado');
-      const origError = console.error;
-      console.error = function(...args) {
-        document.body.innerHTML += '<p style="color:red;white-space:pre;font-family:monospace;">' + args.join(' ') + '</p>';
-        origError.apply(console, args);
-      };
-      window.onerror = function(msg, url, line, col, err) {
-        const text = `ERROR: ${msg}\nat ${url}:${line}:${col}\n${err?.stack || ''}`;
-        console.error(text);
-        return true;
-      };
-      window.onunhandledrejection = function(event) {
-        const text = `UNHANDLED REJECTION: ${event.reason}`;
-        console.error(text);
-      };
+      const status = document.getElementById('status');
+      
+      function updateStatus(msg) {
+        status.textContent = msg;
+        console.log(msg);
+      }
+      
+      updateStatus('JavaScript ejecutándose...');
+      
+      window.addEventListener('error', (event) => {
+        const loading = document.getElementById('loading');
+        loading.style.background = '#ffcccc';
+        updateStatus(`ERROR: ${event.message} (${event.filename}:${event.lineno})`);
+      });
+      
+      window.addEventListener('unhandledrejection', (event) => {
+        const loading = document.getElementById('loading');
+        loading.style.background = '#ffcccc';
+        updateStatus(`REJECTION: ${event.reason}`);
+      });
+      
+      updateStatus('Cargando módulos...');
     </script>
-    <script type="module" src="/src/main.tsx"></script>
+    <script type="module">
+      const status = document.getElementById('status');
+      status.textContent = 'Módulos cargados, importando React...';
+      
+      try {
+        import('/src/main.tsx').then(() => {
+          status.textContent = 'React cargado, removiendo loader...';
+          const loading = document.getElementById('loading');
+          if (loading) {
+            setTimeout(() => loading.remove(), 500);
+          }
+        }).catch(err => {
+          status.textContent = `Error al cargar React: ${err.message}`;
+          console.error('Module import error:', err);
+        });
+      } catch (err) {
+        status.textContent = `Error: ${err.message}`;
+        console.error('Sync error:', err);
+      }
+    </script>
   </body>
 </html>
