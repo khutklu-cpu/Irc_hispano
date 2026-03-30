@@ -5,9 +5,27 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IRC Hispano Client</title>
+    <style>
+      body { font-family: monospace; margin: 0; padding: 20px; background: #1e1e1e; color: #e0e0e0; }
+      #error-display { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #1e1e1e; padding: 20px; overflow: auto; display: none; color: #ff6b6b; white-space: pre-wrap; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
+    <div id="error-display"></div>
+    <script>
+      window.addEventListener('error', (event) => {
+        const display = document.getElementById('error-display');
+        display.style.display = 'block';
+        display.textContent += `\nError: ${event.message}\n${event.filename}:${event.lineno}:${event.colno}\n`;
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        const display = document.getElementById('error-display');
+        display.style.display = 'block';
+        display.textContent += `\nUnhandledRejection: ${event.reason}\n`;
+      });
+      console.log('Index.html loaded, waiting for React...');
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
