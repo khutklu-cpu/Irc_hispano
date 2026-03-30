@@ -113,25 +113,31 @@ export class IRCService {
         console.log(`[IRC] Abriendo WebSocket en puerto ${port}...`);
         const socket = await this.openSocketOnPort(port);
         console.log(`[IRC] WebSocket abierto exitosamente en puerto ${port}`);
-        
+
         this.socket = socket;
         this.socketPort = port;
+
+        // Marcar gateway como listo ANTES de escuchar mensajes,
+        // para que flushControlQueue (HOST) pueda enviarse de inmediato.
+        this.gatewayReady = true;
         this.bindActiveSocket(socket);
 
-        console.log(`[IRC] Socket vinculado, enviando CONTROL START...`);
         this.emitStateChange({
           connected: false,
           nickname: this.nickname,
           server: IRC_HOST,
           port: IRC_PORT,
           channels: this.getChannels(),
-          status: `Gateway IRC conectado en puerto ${port}.`,
+          status: `Gateway IRC conectado en puerto ${port}. Iniciando protocolo...`,
           action: 'socket-open',
         });
 
+        // Enviar secuencia de inicio: CONTROL START -> HOST -> ENCODING
+        console.log(`[IRC] Enviando CONTROL START, HOST y ENCODING...`);
         this.sendGatewayPayload(`:${CONTROL_CHANNEL} CONTROL START`);
-        this.sendGatewayPayload(`:${IRC_CHANNEL}`);
-        console.log(`[IRC] CONTROL START enviado, esperando respuesta...`);
+        this.flushControlQueue();          // envía HOST irc.chathispano.com:+7002
+        this.sendGatewayPayload(`:${IRC_CHANNEL} ENCODING utf8`);
+        console.log(`[IRC] Protocolo de inicio enviado, esperando 'control connected'...`);
         return;
       } catch (error) {
         lastError = error instanceof Error ? error.message : `Fallo en puerto ${port}.`;
@@ -464,23 +470,10 @@ export class IRCService {
 
     const spaceIndex = data.indexOf(' ');
     if (spaceIndex === -1) {
+      // Frame solitario ':1' (algunos servidores lo envían como ack del canal).
+      // Ya no dependemos de este para activar el flujo; solo logueamos.
       const channelId = data.substring(1);
-      console.log(`[IRC] Mensaje sin payload en canal ${channelId}`);
-      if (channelId === IRC_CHANNEL) {
-        this.gatewayReady = true;
-        console.log('[IRC] Gateway listo, enviando comandos en cola...');
-        this.flushControlQueue();
-        this.sendControl('ENCODING utf8');
-        this.emitStateChange({
-          connected: false,
-          nickname: this.nickname,
-          server: IRC_HOST,
-          port: IRC_PORT,
-          channels: this.getChannels(),
-          status: 'Canal IRC abierto. Iniciando autenticacion...',
-          action: 'gateway-open',
-        });
-      }
+      console.log(`[IRC] Frame solitario en canal ${channelId} (ignorado - gatewayReady ya activo)`);
       return;
     }
 
@@ -493,6 +486,12 @@ export class IRCService {
     }
 
     if (payload.startsWith('control connected')) {
+      console.log('[IRC] control connected recibido. Enviando NICK/USER...');
+      // Asegurar que el HOST se enviara antes (si quedó algo pendiente)
+      if (!this.gatewayReady) {
+        this.gatewayReady = true;
+        this.flushControlQueue();
+      }
       this.ircReady = true;
       this.flushLineQueue();
       this.emitStateChange({
@@ -501,7 +500,7 @@ export class IRCService {
         server: IRC_HOST,
         port: IRC_PORT,
         channels: this.getChannels(),
-        status: 'Gateway conectado. Enviando NICK/USER...',
+        status: 'Gateway conectado al IRC. Enviando credenciales...',
         action: 'gateway-connected',
       });
       return;
@@ -688,14 +687,6 @@ export class IRCService {
       });
     }
     return this.channels.get(normalized)!;
-  }
-
-  private sendControl(line: string): void {
-    if (this.gatewayReady && this.socket) {
-      this.sendGatewayPayload(`:${IRC_CHANNEL} ${line}`);
-      return;
-    }
-    this.pendingControl.push(line);
   }
 
   private flushControlQueue(): void {
