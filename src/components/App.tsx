@@ -87,6 +87,7 @@ export const App: React.FC = () => {
   const [joinTarget, setJoinTarget] = useState('');
   const [tick, setTick] = useState(0);
   const [isGuestMode, setIsGuestMode] = useState(false);
+  const [guestViewOpen, setGuestViewOpen] = useState(false);
   const timelineEndRef = useRef<HTMLDivElement>(null);
 
   // Quitar loading screen cuando el componente se monta
@@ -282,36 +283,9 @@ export const App: React.FC = () => {
 
   async function handleGuestLogin() {
     setError('');
-    setStatus('Intentando acceso como invitado...');
-    
-    try {
-      // Intentar guest register primero
-      const guestClient = createMatrixClient();
-      await guestClient.registerGuest();
-      
-      setClient(guestClient);
-      setUserId('(Invitado)');
-      setStatus('Conectado como invitado.');
-      setSessionReady(true);
-      setIsGuestMode(true);
-    } catch (guestError) {
-      // Si falla guest login, redirigir a la web oficial que SÍ lo soporta
-      const message = guestError instanceof Error ? guestError.message : 'Error desconocido';
-      
-      if (message.includes('M_FORBIDDEN') || message.includes('disabled')) {
-        // El servidor no soporta guest, abrir la web oficial
-        setError('El servidor Matrix requiere cuenta. Abriendo web oficial con guest...');
-        setStatus('Redirigiendo a chathispano.com/element...');
-        
-        setTimeout(() => {
-          window.location.href = 'https://chathispano.com/element/#/welcome';
-        }, 2000);
-      } else {
-        setError(`No se pudo conectar como invitado: ${message}`);
-        setStatus('No conectado.');
-        setSessionReady(true);
-      }
-    }
+    setStatus('Abriendo acceso de invitado dentro de la web...');
+    setGuestViewOpen(true);
+    setSessionReady(true);
   }
 
   if (!sessionReady && !client) {
@@ -319,6 +293,40 @@ export const App: React.FC = () => {
   }
 
   if (!client) {
+    if (guestViewOpen) {
+      return (
+        <div className="guest-shell">
+          <header className="guest-topbar">
+            <div>
+              <p className="eyebrow">Modo invitado</p>
+              <h1>Chat Hispano</h1>
+              <p className="lead">Acceso integrado dentro de esta web.</p>
+            </div>
+
+            <button
+              className="ghost-button"
+              onClick={() => {
+                setGuestViewOpen(false);
+                setStatus('Conecta con tu cuenta de Chat Hispano.');
+              }}
+              type="button"
+            >
+              Volver
+            </button>
+          </header>
+
+          <section className="guest-frame-panel">
+            <iframe
+              className="guest-frame"
+              src="https://chathispano.com/element/#/welcome"
+              title="Acceso invitado Chat Hispano"
+              allow="clipboard-read; clipboard-write"
+            />
+          </section>
+        </div>
+      );
+    }
+
     return (
       <div className="login-shell">
         <section className="login-card">

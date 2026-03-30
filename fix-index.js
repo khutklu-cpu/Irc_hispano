@@ -4,6 +4,17 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distIndex = path.join(__dirname, 'dist', 'index.html');
+const originalHtml = fs.readFileSync(distIndex, 'utf-8');
+
+const scriptMatch = originalHtml.match(/src="([^"]+\.js)"/);
+const styleMatch = originalHtml.match(/href="([^"]+\.css)"/);
+
+if (!scriptMatch || !styleMatch) {
+  throw new Error('No se pudieron detectar los assets generados por Vite.');
+}
+
+const scriptSrc = scriptMatch[1];
+const styleHref = styleMatch[1];
 
 const newHtml = `<!doctype html>
 <html lang="es">
@@ -11,7 +22,7 @@ const newHtml = `<!doctype html>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>IRC Hispano Client</title>
-    <link rel="stylesheet" href="/Irc_hispano/assets/index-25f2ccf6.css">
+    <link rel="stylesheet" href="${styleHref}">
     <style>
       body { margin: 0; padding: 0; }
       #loading {
@@ -97,7 +108,7 @@ const newHtml = `<!doctype html>
         }
       }, 15000);
     </script>
-    <script type="module" crossorigin src="/Irc_hispano/assets/index-fa8590f9.js"><\/script>
+    <script type="module" crossorigin src="${scriptSrc}"><\/script>
   </body>
 </html>`;
 
