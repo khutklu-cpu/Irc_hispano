@@ -10,6 +10,8 @@ import {
   RoomMemberEvent,
   createClient,
 } from 'matrix-js-sdk';
+import { IRCService } from '../services/ircService';
+import type { Message as IRCTextMessage, UserInfo as IRCUserInfo } from '../types/irc';
 import '../styles/App.css';
 
 const BASE_URL = 'https://whatisthematrix.chathispano.com';
@@ -88,7 +90,18 @@ export const App: React.FC = () => {
   const [tick, setTick] = useState(0);
   const [isGuestMode, setIsGuestMode] = useState(false);
   const [guestViewOpen, setGuestViewOpen] = useState(false);
+  const [guestConnected, setGuestConnected] = useState(false);
+  const [guestNickname, setGuestNickname] = useState('');
+  const [guestChannels, setGuestChannels] = useState<string[]>([]);
+  const [guestSelectedChannel, setGuestSelectedChannel] = useState('');
+  const [guestJoinTarget, setGuestJoinTarget] = useState('');
+  const [guestDraft, setGuestDraft] = useState('');
+  const [guestStatus, setGuestStatus] = useState('Acceso invitado por IRC.');
+  const [guestError, setGuestError] = useState('');
+  const [guestTick, setGuestTick] = useState(0);
   const timelineEndRef = useRef<HTMLDivElement>(null);
+  const guestServiceRef = useRef<IRCService | null>(null);
+  const guestCleanupRef = useRef<Array<() => void>>([]);
 
   // Quitar loading screen cuando el componente se monta
   useEffect(() => {
@@ -172,7 +185,16 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     timelineEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [selectedRoomId, tick]);
+  }, [selectedRoomId, tick, guestSelectedChannel, guestTick]);
+
+  useEffect(() => {
+    return () => {
+      guestCleanupRef.current.forEach((cleanup) => cleanup());
+      guestCleanupRef.current = [];
+      guestServiceRef.current?.disconnect();
+      guestServiceRef.current = null;
+    };
+  }, []);
 
   const selectedRoom = useMemo(
     () => rooms.find((room) => room.roomId === selectedRoomId) || null,
@@ -190,6 +212,81 @@ export const App: React.FC = () => {
       .getJoinedMembers()
       .sort((left, right) => left.name.localeCompare(right.name));
   }, [selectedRoom, tick]);
+
+  const guestMessages = useMemo(() => {
+    if (!guestSelectedChannel || !guestServiceRef.current) return [] as IRCTextMessage[];
+    return guestServiceRef.current.getChannelMessages(guestSelectedChannel);
+  }, [guestSelectedChannel, guestTick]);
+
+  const guestUsers = useMemo(() => {
+    if (!guestSelectedChannel || !guestServiceRef.current) return [] as IRCUserInfo[];
+    return guestServiceRef.current
+      .getChannelUsers(guestSelectedChannel)
+      .sort((left, right) => left.nickname.localeCompare(right.nickname));
+  }, [guestSelectedChannel, guestTick]);
+
+  const guestTimeline = useMemo(
+    () => guestMessages.map((message, index) => ({
+      id: `${message.timestamp.getTime()}-${message.nickname}-${index}`,
+      sender: message.nickname === 'SYSTEM' ? 'sistema' : message.nickname,
+      body: message.content,
+      timestamp: message.timestamp.getTime(),
+      own: message.nickname === guestNickname,
+    })),
+    [guestMessages, guestNickname],
+  );
+
+  function ensureGuestService(): IRCService {
+    if (guestServiceRef.current) {
+      return guestServiceRef.current;
+    }
+
+    const service = new IRCService();
+    guestServiceRef.current = service;
+    guestCleanupRef.current = [
+      service.onMessage(() => {
+        setGuestTick((value) => value + 1);
+      }),
+      service.onStateChange((state) => {
+        setGuestConnected(state.connected);
+        setGuestNickname(service.getNickname());
+        setGuestChannels(service.getChannels());
+        setGuestSelectedChannel((current) => {
+          const nextChannels = service.getChannels();
+          if (current && nextChannels.includes(current)) {
+            return current;
+          }
+          return nextChannels[0] || '';
+        });
+        if (state.status) {
+          setGuestStatus(state.status);
+        }
+        if (state.error) {
+          setGuestError(state.error);
+        }
+        setGuestTick((value) => value + 1);
+      }),
+    ];
+
+    return service;
+  }
+
+  function closeGuestView() {
+    guestCleanupRef.current.forEach((cleanup) => cleanup());
+    guestCleanupRef.current = [];
+    guestServiceRef.current?.disconnect();
+    guestServiceRef.current = null;
+    setGuestViewOpen(false);
+    setGuestConnected(false);
+    setGuestNickname('');
+    setGuestChannels([]);
+    setGuestSelectedChannel('');
+    setGuestJoinTarget('');
+    setGuestDraft('');
+    setGuestStatus('Acceso invitado por IRC.');
+    setGuestError('');
+    setIsGuestMode(false);
+  }
 
   async function handleLogin(event: React.FormEvent) {
     event.preventDefault();
@@ -278,14 +375,45 @@ export const App: React.FC = () => {
     setJoinTarget('');
     setError('');
     setStatus('Sesion cerrada.');
-    setIsGuestMode(false);
   }
 
   async function handleGuestLogin() {
+    const service = ensureGuestService();
+    const nextNickname = IRCService.generateGuestNick();
+
     setError('');
-    setStatus('Abriendo acceso de invitado dentro de la web...');
+    setGuestError('');
+    setGuestStatus('Conectando al IRC invitado...');
     setGuestViewOpen(true);
     setSessionReady(true);
+    setIsGuestMode(true);
+    setGuestNickname(nextNickname);
+
+    try {
+      await service.connect(nextNickname, nextNickname, 'Invitado web de Chat Hispano');
+      setGuestError('');
+      setGuestStatus('Conectado al IRC de Chat Hispano.');
+    } catch (guestLoginError) {
+      const message = guestLoginError instanceof Error ? guestLoginError.message : 'No se pudo conectar como invitado';
+      setGuestError(message);
+      setGuestStatus('No conectado.');
+    }
+  }
+
+  function handleGuestJoinRoom(event: React.FormEvent) {
+    event.preventDefault();
+    if (!guestServiceRef.current || !guestJoinTarget.trim()) return;
+
+    guestServiceRef.current.joinChannel(guestJoinTarget.trim());
+    setGuestJoinTarget('');
+  }
+
+  function handleGuestSendMessage(event: React.FormEvent) {
+    event.preventDefault();
+    if (!guestServiceRef.current || !guestSelectedChannel || !guestDraft.trim()) return;
+
+    guestServiceRef.current.sendMessage(guestSelectedChannel, guestDraft.trim());
+    setGuestDraft('');
   }
 
   if (!sessionReady && !client) {
@@ -295,34 +423,124 @@ export const App: React.FC = () => {
   if (!client) {
     if (guestViewOpen) {
       return (
-        <div className="guest-shell">
-          <header className="guest-topbar">
+        <div className="client-shell">
+          <header className="client-topbar">
             <div>
               <p className="eyebrow">Modo invitado</p>
-              <h1>Chat Hispano</h1>
-              <p className="lead">Acceso integrado dentro de esta web.</p>
+              <h1>Chat Hispano IRC</h1>
+              <p className="lead">Cliente propio conectado al gateway IRC de Chat Hispano.</p>
             </div>
 
-            <button
-              className="ghost-button"
-              onClick={() => {
-                setGuestViewOpen(false);
-                setStatus('Conecta con tu cuenta de Chat Hispano.');
-              }}
-              type="button"
-            >
-              Volver
-            </button>
+            <div className="topbar-meta">
+              <span>{guestNickname || 'Invitado'}</span>
+              <button className="ghost-button" onClick={closeGuestView} type="button">
+                Salir
+              </button>
+            </div>
           </header>
 
-          <section className="guest-frame-panel">
-            <iframe
-              className="guest-frame"
-              src="https://chathispano.com/element/#/welcome"
-              title="Acceso invitado Chat Hispano"
-              allow="clipboard-read; clipboard-write"
-            />
-          </section>
+          <div className="workspace">
+            <aside className="sidebar">
+              <form className="join-form" onSubmit={handleGuestJoinRoom}>
+                <label>
+                  Unirte a canal
+                  <input
+                    value={guestJoinTarget}
+                    onChange={(event) => setGuestJoinTarget(event.target.value)}
+                    placeholder="#canal"
+                  />
+                </label>
+                <button className="primary-button" disabled={!guestConnected} type="submit">
+                  Unir
+                </button>
+              </form>
+
+              <div className="room-list">
+                {guestChannels.map((channelName) => (
+                  <button
+                    key={channelName}
+                    className={channelName === guestSelectedChannel ? 'room-item active' : 'room-item'}
+                    onClick={() => setGuestSelectedChannel(channelName)}
+                    type="button"
+                  >
+                    <span className="room-name">{channelName}</span>
+                    <span className="room-meta">
+                      {guestServiceRef.current?.getChannelUsers(channelName).length || 0} usuarios
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </aside>
+
+            <main className="timeline-panel">
+              {guestSelectedChannel ? (
+                <>
+                  <div className="timeline-header">
+                    <div>
+                      <h2>{guestSelectedChannel}</h2>
+                      <p>IRC invitado</p>
+                    </div>
+                    <span>{guestUsers.length} conectados</span>
+                  </div>
+
+                  <div className="timeline">
+                    {guestTimeline.length === 0 ? (
+                      <div className="empty-state">Todavia no hay mensajes en este canal.</div>
+                    ) : (
+                      guestTimeline.map((message) => (
+                        <article key={message.id} className={message.own ? 'message own' : 'message'}>
+                          <div className="message-meta">
+                            <strong>{message.sender}</strong>
+                            <time>
+                              {new Date(message.timestamp).toLocaleTimeString('es-ES', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </time>
+                          </div>
+                          <p>{message.body}</p>
+                        </article>
+                      ))
+                    )}
+                    <div ref={timelineEndRef} />
+                  </div>
+
+                  <form className="composer" onSubmit={handleGuestSendMessage}>
+                    <input
+                      value={guestDraft}
+                      onChange={(event) => setGuestDraft(event.target.value)}
+                      placeholder={guestConnected ? 'Escribe un mensaje' : 'Conectando...'}
+                    />
+                    <button className="primary-button" disabled={!guestConnected} type="submit">
+                      Enviar
+                    </button>
+                  </form>
+                </>
+              ) : (
+                <div className="empty-state large">
+                  {guestConnected
+                    ? 'Conectado. Usa el panel izquierdo para unirte a un canal.'
+                    : 'Conectando al IRC invitado...'}
+                </div>
+              )}
+            </main>
+
+            <aside className="members-panel">
+              <h3>Participantes</h3>
+              <div className="member-list">
+                {guestUsers.map((member) => (
+                  <div className="member-item" key={member.nickname}>
+                    <span>{`${member.mode || ''}${member.nickname}`}</span>
+                  </div>
+                ))}
+              </div>
+            </aside>
+          </div>
+
+          <footer className="footer-bar">
+            <span>{guestStatus}</span>
+            {guestError && <span className="error-inline">{guestError}</span>}
+          </footer>
         </div>
       );
     }
