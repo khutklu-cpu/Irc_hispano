@@ -91,6 +91,7 @@ export const App: React.FC = () => {
   const [isGuestMode, setIsGuestMode] = useState(false);
   const [guestViewOpen, setGuestViewOpen] = useState(false);
   const [guestConnected, setGuestConnected] = useState(false);
+  const [guestConnecting, setGuestConnecting] = useState(false);
   const [guestNickname, setGuestNickname] = useState('');
   const [guestChannels, setGuestChannels] = useState<string[]>([]);
   const [guestSelectedChannel, setGuestSelectedChannel] = useState('');
@@ -378,34 +379,62 @@ export const App: React.FC = () => {
   }
 
   async function handleGuestLogin() {
-    const service = ensureGuestService();
-    const nextNickname = IRCService.generateGuestNick();
-
+    // Solo abre la UI sin conectar
     setError('');
     setGuestError('');
-    setGuestStatus('Conectando al IRC invitado...');
+    setGuestStatus('Listo para conectar. Ingresa un canal y presiona "Unir".');
     setGuestViewOpen(true);
     setSessionReady(true);
     setIsGuestMode(true);
+    
+    const nextNickname = IRCService.generateGuestNick();
     setGuestNickname(nextNickname);
-
-    try {
-      await service.connect(nextNickname, nextNickname, 'Invitado web de Chat Hispano');
-      setGuestError('');
-      setGuestStatus('Conectado al IRC de Chat Hispano.');
-    } catch (guestLoginError) {
-      const message = guestLoginError instanceof Error ? guestLoginError.message : 'No se pudo conectar como invitado';
-      setGuestError(message);
-      setGuestStatus('No conectado.');
-    }
+    
+    console.log('[GUEST] UI abierta con nick:', nextNickname);
   }
 
-  function handleGuestJoinRoom(event: React.FormEvent) {
+  async function handleGuestJoinRoom(event: React.FormEvent) {
     event.preventDefault();
-    if (!guestServiceRef.current || !guestJoinTarget.trim()) return;
+    
+    const service = ensureGuestService();
+    if (!guestJoinTarget.trim()) {
+      setGuestError('Por favor ingresa un canal (ej: #hispano)');
+      return;
+    }
 
-    guestServiceRef.current.joinChannel(guestJoinTarget.trim());
-    setGuestJoinTarget('');
+    // Si no está conectado, conectar primero
+    if (!guestConnected && !guestConnecting) {
+      setGuestConnecting(true);
+      setGuestError('');
+      setGuestStatus('Conectando al IRC de Chat Hispano...');
+      
+      try {
+        console.log('[GUEST] Iniciando conexión con nick:', guestNickname);
+        await service.connect(guestNickname, guestNickname, 'Invitado web de Chat Hispano');
+        console.log('[GUEST] Conexión exitosa');
+        setGuestConnected(true);
+        setGuestStatus('Conectado al IRC de Chat Hispano.');
+        setGuestError('');
+        setGuestConnecting(false);
+        
+        // Ahora unirse al canal
+        const channelToJoin = guestJoinTarget.trim();
+        setGuestJoinTarget('');
+        service.joinChannel(channelToJoin);
+        
+      } catch (connectError) {
+        const message = connectError instanceof Error ? connectError.message : 'No se pudo conectar al IRC';
+        console.error('[GUEST] Error de conexión:', message);
+        setGuestError(message);
+        setGuestStatus('No conectado.');
+        setGuestConnecting(false);
+        setGuestConnected(false);
+      }
+    } else if (guestConnected) {
+      // Ya estamos conectados, solo unirse al canal
+      service.joinChannel(guestJoinTarget.trim());
+      setGuestJoinTarget('');
+    }
   }
 
   function handleGuestSendMessage(event: React.FormEvent) {
@@ -448,10 +477,11 @@ export const App: React.FC = () => {
                     value={guestJoinTarget}
                     onChange={(event) => setGuestJoinTarget(event.target.value)}
                     placeholder="#canal"
+                    disabled={guestConnecting}
                   />
                 </label>
-                <button className="primary-button" disabled={!guestConnected} type="submit">
-                  Unir
+                <button className="primary-button" disabled={guestConnecting} type="submit">
+                  {guestConnecting ? 'Conectando...' : 'Unir'}
                 </button>
               </form>
 
@@ -509,7 +539,7 @@ export const App: React.FC = () => {
                     <input
                       value={guestDraft}
                       onChange={(event) => setGuestDraft(event.target.value)}
-                      placeholder={guestConnected ? 'Escribe un mensaje' : 'Conectando...'}
+                      placeholder={guestConnected ? 'Escribe un mensaje' : 'Conectate primero...'}
                     />
                     <button className="primary-button" disabled={!guestConnected} type="submit">
                       Enviar
@@ -518,9 +548,11 @@ export const App: React.FC = () => {
                 </>
               ) : (
                 <div className="empty-state large">
-                  {guestConnected
+                  {guestConnecting
+                    ? 'Conectando al IRC de Chat Hispano...'
+                    : guestConnected
                     ? 'Conectado. Usa el panel izquierdo para unirte a un canal.'
-                    : 'Conectando al IRC invitado...'}
+                    : 'Ingresa un canal (ej: #hispano) en el panel izquierdo y presiona "Unir" para conectar.'}
                 </div>
               )}
             </main>
